@@ -115,11 +115,15 @@ fn error_missing_rparen() {
 }
 
 #[test]
-fn error_unknown_structure() {
-    let err = parse_program("foo(1);").expect_err("unknown call should error");
-    assert_eq!(err.code, "UnknownStructure");
-    assert_eq!(err.span.start_line, 1);
-    assert_eq!(err.span.start_col, 1);
+fn parse_ident_call() {
+    let p = parse_program("foo(1);").unwrap();
+    assert_eq!(
+        p,
+        program(vec![Stmt::ExprStmt(Expr::Call(CallExpr {
+            callee: Callee::Ident("foo".into()),
+            args: vec![Expr::Literal(Literal::Number(1))],
+        }))])
+    );
 }
 
 #[test]
@@ -156,4 +160,3 @@ fn lexer_produces_dot_token_for_console_log() {
         ]
     );
 }
-

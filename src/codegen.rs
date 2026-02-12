@@ -1,11 +1,14 @@
-use crate::ast::{Callee, CallExpr, Expr, Literal, Program, Stmt, VarDecl};
+use crate::ast::{
+    AssignStmt, BinaryExpr, BinaryOp, Callee, CallExpr, Expr, Literal, Program, Stmt, UnaryExpr,
+    UnaryOp, VarDecl,
+};
 use crate::error::Error;
 use crate::span::Span;
 
 /// CodeGen 的对外入口：把 AST（Program）生成 Rust 源码字符串。
 ///
-/// 设计说明（Step3 子集）：
-/// - 只处理 Step2 的最小 AST：变量声明 + `console.log(literal)`。
+/// 设计说明（Step4 子集）：
+/// - 只处理 Step2/Step4 的 AST：变量声明、赋值、表达式（含优先级）、函数调用。
 /// - 生成“完整 Rust 程序”，因此总是输出 `fn main(){ ... }` 结构。
 /// - 这里的输出是字符串，是否写入文件由 CLI（main.rs）负责。
 pub fn generate(program: &Program) -> Result<String, Error> {
@@ -43,6 +46,7 @@ pub fn gen_program(program: &Program) -> Result<String, Error> {
 pub fn gen_stmt(stmt: &Stmt) -> Result<String, Error> {
     match stmt {
         Stmt::VarDecl(v) => gen_var_decl(v),
+        Stmt::Assign(a) => gen_assign(a),
         Stmt::ExprStmt(e) => {
             let expr = gen_expr(e)?;
             Ok(format!("{expr};"))
@@ -67,14 +71,17 @@ fn gen_var_decl(v: &VarDecl) -> Result<String, Error> {
 
 /// 生成表达式。
 ///
-/// Step3 只支持：
-/// - 字面量（Literal）
-/// - console.log 调用（Call）
+/// 生成表达式（Step4：含一元/二元/括号/调用/标识符）。
+///
+/// 核心要求：生成的 Rust 表达式必须与 AST 的求值顺序一致。
+/// 因此在必要时需要补括号（例如 `(1+2)*3` 不能生成 `1+2*3`）。
 pub fn gen_expr(expr: &Expr) -> Result<String, Error> {
-    match expr {
-        Expr::Literal(lit) => Ok(gen_literal_expr(lit)),
-        Expr::Call(call) => gen_call(call),
-    }
+    gen_expr_bp(expr, 0)
+}
+
+fn gen_assign(a: &AssignStmt) -> Result<String, Error> {
+    let value = gen_expr(&a.value)?;
+    Ok(format!("{} = {value};", a.name))
 }
 
 /// 生成函数调用表达式。
@@ -94,6 +101,76 @@ fn gen_call(call: &CallExpr) -> Result<String, Error> {
             let arg = gen_expr(&call.args[0])?;
             Ok(format!("println!(\"{{:?}}\", {arg})"))
         }
+        Callee::Ident(ref name) => {
+            let mut args = Vec::new();
+            for a in &call.args {
+                args.push(gen_expr(a)?);
+            }
+            Ok(format!("{name}({})", args.join(", ")))
+        }
+    }
+}
+
+fn gen_expr_bp(expr: &Expr, parent_bp: u8) -> Result<String, Error> {
+    // 这里用“表达式绑定强度（bp）”来决定是否加括号：
+    // - 子表达式 bp < 父表达式 bp 时，必须加括号，避免 Rust 按自己的优先级重排。
+    // - bp 数值越大，优先级越高（绑定越紧）。
+    let (s, bp) = match expr {
+        Expr::Literal(lit) => (gen_literal_expr(lit), 100),
+        Expr::Ident(name) => (name.clone(), 100),
+        Expr::Group(inner) => (format!("({})", gen_expr_bp(inner, 0)?), 100),
+        Expr::Call(call) => (gen_call(call)?, 90),
+        Expr::Unary(u) => (gen_unary(u)?, 80),
+        Expr::Binary(b) => (gen_binary(b)?, binary_bp(b.op)),
+    };
+
+    if bp < parent_bp {
+        Ok(format!("({s})"))
+    } else {
+        Ok(s)
+    }
+}
+
+fn gen_unary(u: &UnaryExpr) -> Result<String, Error> {
+    let op = match u.op {
+        UnaryOp::Not => "!",
+        UnaryOp::Neg => "-",
+    };
+    let rhs = gen_expr_bp(&u.expr, 80)?;
+    Ok(format!("{op}{rhs}"))
+}
+
+fn gen_binary(b: &BinaryExpr) -> Result<String, Error> {
+    let op = match b.op {
+        BinaryOp::Add => "+",
+        BinaryOp::Sub => "-",
+        BinaryOp::Mul => "*",
+        BinaryOp::Div => "/",
+        BinaryOp::Mod => "%",
+        BinaryOp::EqEq => "==",
+        BinaryOp::NotEq => "!=",
+        BinaryOp::Lt => "<",
+        BinaryOp::LtEq => "<=",
+        BinaryOp::Gt => ">",
+        BinaryOp::GtEq => ">=",
+        BinaryOp::AndAnd => "&&",
+        BinaryOp::OrOr => "||",
+    };
+
+    let bp = binary_bp(b.op);
+    let left = gen_expr_bp(&b.left, bp)?;
+    let right = gen_expr_bp(&b.right, bp + 1)?;
+    Ok(format!("{left} {op} {right}"))
+}
+
+fn binary_bp(op: BinaryOp) -> u8 {
+    match op {
+        BinaryOp::OrOr => 20,
+        BinaryOp::AndAnd => 30,
+        BinaryOp::EqEq | BinaryOp::NotEq => 40,
+        BinaryOp::Lt | BinaryOp::LtEq | BinaryOp::Gt | BinaryOp::GtEq => 50,
+        BinaryOp::Add | BinaryOp::Sub => 60,
+        BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod => 70,
     }
 }
 

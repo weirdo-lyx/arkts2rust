@@ -1,4 +1,7 @@
-use crate::ast::{Callee, CallExpr, Expr, Literal, Program, Stmt, VarDecl};
+use crate::ast::{
+    AssignStmt, BinaryExpr, BinaryOp, Callee, CallExpr, Expr, Literal, Program, Stmt, UnaryExpr,
+    UnaryOp, VarDecl,
+};
 use crate::error::Error;
 use crate::lexer::token::Token;
 use crate::lexer::token::TokenKind;
@@ -39,6 +42,7 @@ impl<'a> Parser<'a> {
 
     /// 解析单条语句（Stmt）
     /// - `let/const` -> parse_var_decl
+    /// - `Ident = Expr ;` -> Assign
     /// - 其它 -> parse_expr + 分号
     ///
     /// 说明：Step2 的语法要求“每条语句都必须以分号结尾”。
@@ -47,8 +51,15 @@ impl<'a> Parser<'a> {
         match self.peek_kind() {
             Some(TokenKind::KwLet) => self.parse_var_decl(false),
             Some(TokenKind::KwConst) => self.parse_var_decl(true),
+            Some(TokenKind::Ident(_)) if matches!(self.peek_kind_n(1), Some(TokenKind::Eq)) => {
+                let name = self.expect_ident()?;
+                self.expect_simple(TokenKind::Eq)?;
+                let value = self.parse_expr_bp(0)?;
+                self.expect_semicolon()?;
+                Ok(Stmt::Assign(AssignStmt { name, value }))
+            }
             _ => {
-                let expr = self.parse_expr()?;
+                let expr = self.parse_expr_bp(0)?;
                 self.expect_semicolon()?;
                 Ok(Stmt::ExprStmt(expr))
             }
@@ -77,42 +88,143 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    /// 解析表达式（Expr）
-    /// - 数字/字符串/true/false -> Literal
-    /// - 标识符 -> CallExpr (目前只支持 console.log)
+    /// 解析表达式（Pratt Parser / 运算符优先级解析）。
     ///
-    /// Step2 不支持复杂表达式（例如 1 + 2 * 3），所以这里不处理优先级。
-    fn parse_expr(&mut self) -> Result<Expr, Error> {
+    /// `min_bp` 是当前允许的“最小绑定强度”（binding power）。
+    /// - 数值越大，绑定越紧（优先级越高）。
+    /// - 在 while 循环里不断吃掉可以绑定到左侧的运算符，从而构建正确的 AST 结构。
+    ///
+    /// Step4 支持的优先级（从低到高，简化版）：
+    /// 1) `||`
+    /// 2) `&&`
+    /// 3) `==` `!=`
+    /// 4) `<` `<=` `>` `>=`
+    /// 5) `+` `-`
+    /// 6) `*` `/` `%`
+    /// 7) 前缀 `!` `-`
+    /// 8) 调用 `f(...)`（后缀，绑定最紧）
+    fn parse_expr_bp(&mut self, min_bp: u8) -> Result<Expr, Error> {
+        let mut lhs = self.parse_prefix()?;
+
+        loop {
+            // ---------- 处理函数调用：ident(expr, expr, ...) ----------
+            if matches!(self.peek_kind(), Some(TokenKind::LParen)) {
+                let (l_bp, _r_bp) = (15u8, 16u8);
+                if l_bp < min_bp {
+                    break;
+                }
+
+                let lparen_span = self.peek_span().unwrap_or_default();
+
+                match lhs {
+                    Expr::Ident(name) => {
+                        let args = self.parse_call_args()?;
+                        lhs = Expr::Call(CallExpr {
+                            callee: Callee::Ident(name),
+                            args,
+                        });
+                        continue;
+                    }
+                    Expr::Call(_) => {
+                        return Err(Error::new("UnknownStructure", lparen_span));
+                    }
+                    _ => {
+                        return Err(Error::new("UnknownStructure", lparen_span));
+                    }
+                }
+            }
+
+            // ---------- 处理二元运算 ----------
+            let (l_bp, r_bp, op) = match self.peek_kind().and_then(|k| infix_bp(k)) {
+                Some(x) => x,
+                None => break,
+            };
+
+            if l_bp < min_bp {
+                break;
+            }
+
+            let _op_tok = self.bump();
+            let rhs = self.parse_expr_bp(r_bp)?;
+            lhs = Expr::Binary(BinaryExpr {
+                op,
+                left: Box::new(lhs),
+                right: Box::new(rhs),
+            });
+        }
+
+        Ok(lhs)
+    }
+
+    /// 解析前缀表达式（primary / unary）。
+    fn parse_prefix(&mut self) -> Result<Expr, Error> {
+        match self.peek_kind() {
+            Some(TokenKind::Not) => {
+                let _ = self.bump();
+                let rhs = self.parse_expr_bp(13)?;
+                Ok(Expr::Unary(UnaryExpr {
+                    op: UnaryOp::Not,
+                    expr: Box::new(rhs),
+                }))
+            }
+            Some(TokenKind::Minus) => {
+                let _ = self.bump();
+                let rhs = self.parse_expr_bp(13)?;
+                Ok(Expr::Unary(UnaryExpr {
+                    op: UnaryOp::Neg,
+                    expr: Box::new(rhs),
+                }))
+            }
+            _ => self.parse_primary(),
+        }
+    }
+
+    /// 解析“最基础”的表达式单元（primary）。
+    ///
+    /// 支持：
+    /// - literal：number/string/boolean
+    /// - ident：标识符引用
+    /// - 括号：`(expr)`
+    /// - console.log(literal)：为了兼容 Step2/Step3（保持 console.log 参数仍是 literal）
+    fn parse_primary(&mut self) -> Result<Expr, Error> {
         match self.peek_kind() {
             Some(TokenKind::Number(_))
             | Some(TokenKind::String(_))
             | Some(TokenKind::KwTrue)
             | Some(TokenKind::KwFalse) => Ok(Expr::Literal(self.parse_literal()?)),
-            Some(TokenKind::Ident(_)) => self.parse_call_expr(),
-            Some(_) => Err(self.err_here("UnexpectedToken")),
-            None => Err(self.err_eof("UnexpectedEof")),
+            Some(TokenKind::Ident(s)) if s == "console.log" => self.parse_console_log_call(),
+            Some(TokenKind::Ident(s)) if s == "console" => {
+                if matches!(self.peek_kind_n(1), Some(TokenKind::Dot))
+                    && matches!(self.peek_kind_n(2), Some(TokenKind::Ident(_)))
+                {
+                    self.parse_console_log_call()
+                } else {
+                    Ok(Expr::Ident(self.expect_ident()?))
+                }
+            }
+            Some(TokenKind::Ident(_)) => Ok(Expr::Ident(self.expect_ident()?)),
+            Some(TokenKind::LParen) => {
+                let _ = self.bump();
+                let inner = self.parse_expr_bp(0)?;
+                self.expect_rparen()?;
+                Ok(Expr::Group(Box::new(inner)))
+            }
+            Some(_) => Err(self.err_here("ExpectedExpr")),
+            None => Err(self.err_eof("ExpectedExpr")),
         }
     }
 
-    /// 解析函数调用（目前特指 console.log(...)）
+    /// 解析 console.log(literal) 调用（兼容 Step2/Step3）。
     ///
-    /// 支持的两种 token 形式：
-    /// - `Ident("console") Dot Ident("log") ...`
-    /// - （备用兼容）`Ident("console.log") ...`
-    fn parse_call_expr(&mut self) -> Result<Expr, Error> {
+    /// 注意：为了不破坏原来的 Step2 测试，这里仍然严格要求参数是 literal。
+    fn parse_console_log_call(&mut self) -> Result<Expr, Error> {
         let start_span = self.peek_span().unwrap_or_default();
 
-        // 识别 `console.log`：
-        // 1. 如果 lexer 直接识别了 "console.log"（如果是标识符允许点号的情况，但在当前 token 定义中点号是独立的）
-        // 2. 实际上 Token 序列是 [Ident(console), Dot, Ident(log)]
         let callee = match self.peek_kind() {
-            // Case A: 如果直接匹配到 "console.log" 字符串（理论上 Step1 lexer 不会产生含点的 Ident，除非改了）
-            // 但我们的 lexer 把 '.' 视为独立符号，所以这里需要多步匹配。
             Some(TokenKind::Ident(s)) if s == "console.log" => {
                 let _ = self.bump();
                 Callee::ConsoleLog
             }
-            // Case B: 匹配 `console` -> `.` -> `log`
             Some(TokenKind::Ident(s)) if s == "console" => {
                 let _ = self.bump();
                 self.expect_dot()?;
@@ -122,16 +234,46 @@ impl<'a> Parser<'a> {
                 }
                 Callee::ConsoleLog
             }
-            Some(TokenKind::Ident(_)) => return Err(self.err_here("UnknownStructure")),
-            _ => return Err(self.err_here("UnexpectedToken")),
+            _ => return Err(self.err_here("UnknownStructure")),
         };
 
         self.expect_simple(TokenKind::LParen)?;
-        // Step2 要求参数是 literal，因此这里直接 parse_literal()
         let arg = Expr::Literal(self.parse_literal()?);
         let args = vec![arg];
         self.expect_rparen()?;
         Ok(Expr::Call(CallExpr { callee, args }))
+    }
+
+    /// 解析函数调用参数列表（用于 ident(expr, expr, ...)）。
+    ///
+    /// 进入本函数时，当前 token 必须是 `(`。
+    fn parse_call_args(&mut self) -> Result<Vec<Expr>, Error> {
+        self.expect_simple(TokenKind::LParen)?;
+
+        let mut args = Vec::new();
+        if matches!(self.peek_kind(), Some(TokenKind::RParen)) {
+            let _ = self.bump();
+            return Ok(args);
+        }
+
+        loop {
+            let expr = self.parse_expr_bp(0)?;
+            args.push(expr);
+
+            match self.peek_kind() {
+                Some(TokenKind::Comma) => {
+                    let _ = self.bump();
+                }
+                Some(TokenKind::RParen) => {
+                    let _ = self.bump();
+                    break;
+                }
+                Some(_) => return Err(self.err_here("MissingRParen")),
+                None => return Err(self.err_eof("MissingRParen")),
+            }
+        }
+
+        Ok(args)
     }
 
     /// 解析字面量（Literal）
@@ -235,6 +377,13 @@ impl<'a> Parser<'a> {
         self.tokens.get(self.i).map(|t| &t.kind)
     }
 
+    /// 向前偷看第 n 个 token 的 kind（不前进）。
+    ///
+    /// 例：`peek_kind_n(1)` 表示看“下一个 token”，`peek_kind_n(2)` 表示看“下下个 token”。
+    fn peek_kind_n(&self, n: usize) -> Option<&TokenKind> {
+        self.tokens.get(self.i + n).map(|t| &t.kind)
+    }
+
     /// 偷看当前 token 的 span（不前进）。
     fn peek_span(&self) -> Option<Span> {
         self.tokens.get(self.i).map(|t| t.span)
@@ -276,5 +425,31 @@ impl<'a> Parser<'a> {
     /// - 如果 tokens 为空：使用默认 span（1:1..1:1）
     fn eof_span(&self) -> Span {
         self.tokens.last().map(|t| t.span).unwrap_or_default()
+    }
+}
+
+fn infix_bp(kind: &TokenKind) -> Option<(u8, u8, BinaryOp)> {
+    // 这里返回 (left_bp, right_bp, op)：
+    // - left_bp 越大，表示该运算符越“紧密地绑定”左侧
+    // - right_bp 越大，表示该运算符越“紧密地绑定”右侧
+    //
+    // 左结合实现技巧：
+    // - 对左结合运算符（本 Step 的所有二元运算符都是左结合），使用 (p, p+1)
+    //   能确保 `1-2-3` 解析为 `(1-2)-3`，而不是 `1-(2-3)`。
+    match kind {
+        TokenKind::OrOr => Some((1, 2, BinaryOp::OrOr)),
+        TokenKind::AndAnd => Some((3, 4, BinaryOp::AndAnd)),
+        TokenKind::EqEq => Some((5, 6, BinaryOp::EqEq)),
+        TokenKind::NotEq => Some((5, 6, BinaryOp::NotEq)),
+        TokenKind::Lt => Some((7, 8, BinaryOp::Lt)),
+        TokenKind::LtEq => Some((7, 8, BinaryOp::LtEq)),
+        TokenKind::Gt => Some((7, 8, BinaryOp::Gt)),
+        TokenKind::GtEq => Some((7, 8, BinaryOp::GtEq)),
+        TokenKind::Plus => Some((9, 10, BinaryOp::Add)),
+        TokenKind::Minus => Some((9, 10, BinaryOp::Sub)),
+        TokenKind::Star => Some((11, 12, BinaryOp::Mul)),
+        TokenKind::Slash => Some((11, 12, BinaryOp::Div)),
+        TokenKind::Percent => Some((11, 12, BinaryOp::Mod)),
+        _ => None,
     }
 }
