@@ -1,6 +1,6 @@
 use crate::ast::{
-    AssignStmt, BinaryExpr, BinaryOp, Callee, CallExpr, Expr, Literal, Program, Stmt, UnaryExpr,
-    UnaryOp, VarDecl,
+    AssignStmt, BinaryExpr, BinaryOp, BlockStmt, Callee, CallExpr, Expr, IfStmt, Literal, Program,
+    ReturnStmt, Stmt, UnaryExpr, UnaryOp, VarDecl, WhileStmt,
 };
 use crate::error::Error;
 use crate::lexer::token::Token;
@@ -43,14 +43,23 @@ impl<'a> Parser<'a> {
     /// 解析单条语句（Stmt）
     /// - `let/const` -> parse_var_decl
     /// - `Ident = Expr ;` -> Assign
-    /// - 其它 -> parse_expr + 分号
+    /// - `{ ... }` -> Block
+    /// - `if (...) ... else ...` -> If
+    /// - `while (...) ...` -> While
+    /// - `return expr?;` -> Return
+    /// - 其它 -> 表达式语句（ExprStmt，必须以分号结尾）
     ///
-    /// 说明：Step2 的语法要求“每条语句都必须以分号结尾”。
-    /// 因为 `;` 不属于表达式本身，所以这里统一在语句层做检查。
+    /// 说明（很重要）：
+    /// - 不是所有语句都需要分号：Block/If/While 不需要。
+    /// - 需要分号的语句：变量声明、赋值、return、表达式语句。
     fn parse_stmt(&mut self) -> Result<Stmt, Error> {
         match self.peek_kind() {
             Some(TokenKind::KwLet) => self.parse_var_decl(false),
             Some(TokenKind::KwConst) => self.parse_var_decl(true),
+            Some(TokenKind::LBrace) => self.parse_block_stmt(),
+            Some(TokenKind::KwIf) => self.parse_if_stmt(),
+            Some(TokenKind::KwWhile) => self.parse_while_stmt(),
+            Some(TokenKind::KwReturn) => self.parse_return_stmt(),
             Some(TokenKind::Ident(_)) if matches!(self.peek_kind_n(1), Some(TokenKind::Eq)) => {
                 let name = self.expect_ident()?;
                 self.expect_simple(TokenKind::Eq)?;
@@ -86,6 +95,96 @@ impl<'a> Parser<'a> {
             name,
             init: lit,
         }))
+    }
+
+    /// 解析代码块：`{ stmt* }`
+    ///
+    /// 进入本函数时，当前 token 必须是 `{`。
+    fn parse_block_stmt(&mut self) -> Result<Stmt, Error> {
+        let _ = self.bump(); // 吃掉 '{'
+        let mut stmts = Vec::new();
+
+        while !matches!(self.peek_kind(), Some(TokenKind::RBrace)) {
+            if self.is_eof() {
+                return Err(self.err_eof("MissingRBrace"));
+            }
+            stmts.push(self.parse_stmt()?);
+        }
+
+        let _ = self.bump(); // 吃掉 '}'
+        Ok(Stmt::Block(BlockStmt { stmts }))
+    }
+
+    /// 解析 if 语句：`if (cond) stmt else stmt`
+    fn parse_if_stmt(&mut self) -> Result<Stmt, Error> {
+        let _ = self.bump(); // 吃掉 'if'
+        self.expect_simple(TokenKind::LParen)?;
+        let cond_span = self.peek_span().unwrap_or_default();
+        let cond = self.parse_expr_bp(0)?;
+        self.expect_rparen()?;
+        self.ensure_bool_condition(&cond, cond_span)?;
+
+        let then_branch = self.parse_stmt()?;
+
+        match self.peek_kind() {
+            Some(TokenKind::KwElse) => {
+                let _ = self.bump();
+            }
+            Some(_) => return Err(self.err_here("MissingElse")),
+            None => return Err(self.err_eof("MissingElse")),
+        }
+
+        let else_branch = self.parse_stmt()?;
+        Ok(Stmt::If(IfStmt {
+            cond,
+            then_branch: Box::new(then_branch),
+            else_branch: Box::new(else_branch),
+        }))
+    }
+
+    /// 解析 while 语句：`while (cond) stmt`
+    fn parse_while_stmt(&mut self) -> Result<Stmt, Error> {
+        let _ = self.bump(); // 吃掉 'while'
+        self.expect_simple(TokenKind::LParen)?;
+        let cond_span = self.peek_span().unwrap_or_default();
+        let cond = self.parse_expr_bp(0)?;
+        self.expect_rparen()?;
+        self.ensure_bool_condition(&cond, cond_span)?;
+
+        let body = self.parse_stmt()?;
+        Ok(Stmt::While(WhileStmt {
+            cond,
+            body: Box::new(body),
+        }))
+    }
+
+    /// 解析 return 语句：`return expr?;`
+    fn parse_return_stmt(&mut self) -> Result<Stmt, Error> {
+        let _ = self.bump(); // 吃掉 'return'
+
+        if matches!(self.peek_kind(), Some(TokenKind::Semicolon)) {
+            self.expect_semicolon()?;
+            return Ok(Stmt::Return(ReturnStmt { value: None }));
+        }
+
+        let value = self.parse_expr_bp(0)?;
+        self.expect_semicolon()?;
+        Ok(Stmt::Return(ReturnStmt { value: Some(value) }))
+    }
+
+    /// 检查 if/while 的条件表达式是否“看起来像 bool”。
+    ///
+    /// 限制（写入 docs）：不支持 JS truthy，条件必须是 bool。
+    /// 因为我们没有做完整类型系统，所以这里采取“保守拒绝”的策略：
+    /// - 明确是 number/string 的 literal：直接报错
+    /// - 明确是算术表达式（+ - * / %）或一元负号：直接报错
+    /// - 其它（比较、相等、逻辑、标识符、函数调用）：允许
+    fn ensure_bool_condition(&self, expr: &Expr, span: Span) -> Result<(), Error> {
+        if is_bool_like_expr(expr) {
+            Ok(())
+        } else {
+            Err(Error::new("ConditionMustBeBool", span))
+        }
     }
 
     /// 解析表达式（Pratt Parser / 运算符优先级解析）。
@@ -451,5 +550,30 @@ fn infix_bp(kind: &TokenKind) -> Option<(u8, u8, BinaryOp)> {
         TokenKind::Slash => Some((11, 12, BinaryOp::Div)),
         TokenKind::Percent => Some((11, 12, BinaryOp::Mod)),
         _ => None,
+    }
+}
+
+fn is_bool_like_expr(expr: &Expr) -> bool {
+    match expr {
+        Expr::Literal(Literal::Bool(_)) => true,
+        Expr::Literal(Literal::Number(_)) | Expr::Literal(Literal::String(_)) => false,
+        Expr::Ident(_) => true,
+        Expr::Call(_) => true,
+        Expr::Group(inner) => is_bool_like_expr(inner),
+        Expr::Unary(u) => match u.op {
+            UnaryOp::Not => true,
+            UnaryOp::Neg => false,
+        },
+        Expr::Binary(b) => match b.op {
+            BinaryOp::EqEq
+            | BinaryOp::NotEq
+            | BinaryOp::Lt
+            | BinaryOp::LtEq
+            | BinaryOp::Gt
+            | BinaryOp::GtEq
+            | BinaryOp::AndAnd
+            | BinaryOp::OrOr => true,
+            BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod => false,
+        },
     }
 }

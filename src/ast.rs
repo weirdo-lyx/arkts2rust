@@ -4,7 +4,7 @@
 /// - Token 流：`let`、`x`、`=`、`1`、`;`（一串积木）
 /// - AST：一条“变量声明语句”，名字是 x，初始值是数字 1（有结构）
 ///
-/// 目前（Step2/Step3）只支持最小语句集，所以 Program 里只是一组 `Stmt`。
+/// 目前（Step2~Step5）只支持最小语句集，所以 Program 里只是一组 `Stmt`。
 ///
 /// 说明：为了保持最小实现，这里的 AST 节点暂不保存 Span。
 /// 错误定位主要由 Parser 在报错时提供（使用当前 Token 的 Span）。
@@ -29,6 +29,20 @@ pub enum Stmt {
     Assign(AssignStmt),
     /// 表达式语句：`console.log(123);`
     ExprStmt(Expr),
+    /// 代码块：`{ stmt* }`
+    ///
+    /// 代码块本身是一条语句，但内部可以再嵌套任意条语句（包括 if/while/block）。
+    Block(BlockStmt),
+    /// if/else 语句：`if (cond) stmt else stmt`
+    If(IfStmt),
+    /// while 语句：`while (cond) stmt`
+    While(WhileStmt),
+    /// return 语句：`return expr?;`
+    ///
+    /// 注意：由于我们把所有代码都生成到 `fn main() { ... }` 里，
+    /// Rust 的 main 返回类型是 `()`，因此 `return <expr>;` 的“返回值”在 Rust 中没有意义。
+    /// CodeGen 会把它当作“提前结束”处理：先计算 expr（若存在），再 `return;`。
+    Return(ReturnStmt),
 }
 
 /// 变量声明结构体（let/const）。
@@ -49,6 +63,33 @@ pub struct VarDecl {
 pub struct AssignStmt {
     pub name: String,
     pub value: Expr,
+}
+
+/// 代码块结构体：`{ stmt* }`
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BlockStmt {
+    pub stmts: Vec<Stmt>,
+}
+
+/// if/else 结构体。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IfStmt {
+    pub cond: Expr,
+    pub then_branch: Box<Stmt>,
+    pub else_branch: Box<Stmt>,
+}
+
+/// while 结构体。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WhileStmt {
+    pub cond: Expr,
+    pub body: Box<Stmt>,
+}
+
+/// return 结构体：可选返回值。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReturnStmt {
+    pub value: Option<Expr>,
 }
 
 /// 表达式（Expression）枚举。
