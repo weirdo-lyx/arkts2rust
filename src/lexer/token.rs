@@ -42,6 +42,7 @@ pub enum TokenKind {
     LBrace,
     RBrace,
     Comma,
+    Dot,
     Semicolon,
 
     // ---------- 运算符 ----------
