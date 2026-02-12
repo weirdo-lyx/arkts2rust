@@ -21,6 +21,12 @@ pub struct Program {
 pub enum Stmt {
     /// 变量声明：`let x = 1;` 或 `const y = "abc";`
     VarDecl(VarDecl),
+    /// 赋值语句：`x = expr;`
+    ///
+    /// 注意：这里把赋值当作“语句”而不是“表达式”，是为了保持 Step4 的范围最小：
+    /// - 不支持像 `a = b = 1;` 这种链式赋值表达式
+    /// - 只支持最常见的 `Ident = Expr ;`
+    Assign(AssignStmt),
     /// 表达式语句：`console.log(123);`
     ExprStmt(Expr),
 }
@@ -38,6 +44,13 @@ pub struct VarDecl {
     pub init: Literal,
 }
 
+/// 赋值语句结构体：`name = value;`
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AssignStmt {
+    pub name: String,
+    pub value: Expr,
+}
+
 /// 表达式（Expression）枚举。
 ///
 /// Step2/Step3 的最小表达式集：
@@ -47,8 +60,58 @@ pub struct VarDecl {
 pub enum Expr {
     /// 字面量表达式：123, "abc", true
     Literal(Literal),
+    /// 标识符引用：`x`
+    Ident(String),
+    /// 一元运算：`!x`、`-x`
+    Unary(UnaryExpr),
+    /// 二元运算：`a + b`、`a && b` 等
+    Binary(BinaryExpr),
+    /// 括号表达式：`(a + b)`
+    ///
+    /// 说明：如果不把括号保存进 AST，CodeGen 很容易丢失用户写的括号，导致语义变化。
+    Group(Box<Expr>),
     /// 函数调用表达式：console.log(...)
     Call(CallExpr),
+}
+
+/// 一元表达式结构体。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UnaryExpr {
+    pub op: UnaryOp,
+    pub expr: Box<Expr>,
+}
+
+/// 一元运算符枚举。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UnaryOp {
+    Not,
+    Neg,
+}
+
+/// 二元表达式结构体。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BinaryExpr {
+    pub op: BinaryOp,
+    pub left: Box<Expr>,
+    pub right: Box<Expr>,
+}
+
+/// 二元运算符枚举。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BinaryOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Mod,
+    EqEq,
+    NotEq,
+    Lt,
+    LtEq,
+    Gt,
+    GtEq,
+    AndAnd,
+    OrOr,
 }
 
 /// 函数调用表达式结构体。
@@ -67,6 +130,7 @@ pub struct CallExpr {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Callee {
     ConsoleLog,
+    Ident(String),
 }
 
 /// 字面量（Literal）枚举。
