@@ -17,9 +17,8 @@ pub fn parse_program(src: &str) -> Result<Program, Error> {
     parse_tokens(&tokens)
 }
 
-/// 编译入口（Step0/Step1 仍是占位实现）。
-///
-/// 注意：按照“分步交付”原则，Step1 只实现 Lexer，不允许让 compile 进入 Parser/CodeGen。
-pub fn compile(_src: &str) -> Result<String, Error> {
-    Err(Error::new("NotImplemented", Span::default()))
+pub fn compile(src: &str) -> Result<String, Error> {
+    let tokens = lex(src)?;
+    let program = parse_tokens(&tokens)?;
+    codegen::generate(&program)
 }

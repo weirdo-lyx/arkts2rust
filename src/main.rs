@@ -8,7 +8,7 @@ fn main() {
     let input_path = match args.next() {
         Some(p) => p,
         None => {
-            eprintln!("Usage: arkts2rust <input> -o <output>");
+            eprintln!("Usage: arkts2rust <input.ets> [-o <output.rs>]");
             process::exit(2);
         }
     };
@@ -21,20 +21,13 @@ fn main() {
             }
             _ => {
                 eprintln!("Unknown argument: {arg}");
-                eprintln!("Usage: arkts2rust <input> -o <output>");
+                eprintln!("Usage: arkts2rust <input.ets> [-o <output.rs>]");
                 process::exit(2);
             }
         }
     }
 
-    let output_path = match output_path {
-        Some(p) => p,
-        None => {
-            eprintln!("Missing -o <output>");
-            eprintln!("Usage: arkts2rust <input> -o <output>");
-            process::exit(2);
-        }
-    };
+    let output_path = output_path.unwrap_or_else(|| "output.rs".to_string());
 
     let src = match fs::read_to_string(&input_path) {
         Ok(s) => s,
