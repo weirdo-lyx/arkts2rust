@@ -10,6 +10,12 @@ pub fn parse(tokens: &[Token]) -> Result<Program, Error> {
 }
 
 /// 递归下降解析器结构体。
+///
+/// 小白理解版：
+/// - Parser 就像一个“指针”，在 Token 列表上从左到右走。
+/// - `i` 表示当前看到了第几个 token（类似光标）。
+/// - `peek_*` 表示“偷看一下”，不移动光标。
+/// - `bump()` 表示“吃掉一个 token”，光标向右移动一格。
 struct Parser<'a> {
     tokens: &'a [Token], // Token 流
     i: usize,            // 当前扫描位置
@@ -21,6 +27,8 @@ impl<'a> Parser<'a> {
     }
 
     /// 解析整个程序（Program = { Stmt }）
+    ///
+    /// 规则：一直解析语句直到 token 用完（EOF）。
     fn parse_program(&mut self) -> Result<Program, Error> {
         let mut stmts = Vec::new();
         while !self.is_eof() {
@@ -32,6 +40,9 @@ impl<'a> Parser<'a> {
     /// 解析单条语句（Stmt）
     /// - `let/const` -> parse_var_decl
     /// - 其它 -> parse_expr + 分号
+    ///
+    /// 说明：Step2 的语法要求“每条语句都必须以分号结尾”。
+    /// 因为 `;` 不属于表达式本身，所以这里统一在语句层做检查。
     fn parse_stmt(&mut self) -> Result<Stmt, Error> {
         match self.peek_kind() {
             Some(TokenKind::KwLet) => self.parse_var_decl(false),
@@ -45,6 +56,9 @@ impl<'a> Parser<'a> {
     }
 
     /// 解析变量声明（let x = ...;）
+    ///
+    /// 产生式（简化写法）：
+    /// - `("let" | "const") Ident "=" Literal ";"`（分号在 parse_stmt 里检查，这里也会检查一次以更直观）
     fn parse_var_decl(&mut self, is_const: bool) -> Result<Stmt, Error> {
         if is_const {
             self.expect_simple(TokenKind::KwConst)?;
@@ -66,6 +80,8 @@ impl<'a> Parser<'a> {
     /// 解析表达式（Expr）
     /// - 数字/字符串/true/false -> Literal
     /// - 标识符 -> CallExpr (目前只支持 console.log)
+    ///
+    /// Step2 不支持复杂表达式（例如 1 + 2 * 3），所以这里不处理优先级。
     fn parse_expr(&mut self) -> Result<Expr, Error> {
         match self.peek_kind() {
             Some(TokenKind::Number(_))
@@ -79,6 +95,10 @@ impl<'a> Parser<'a> {
     }
 
     /// 解析函数调用（目前特指 console.log(...)）
+    ///
+    /// 支持的两种 token 形式：
+    /// - `Ident("console") Dot Ident("log") ...`
+    /// - （备用兼容）`Ident("console.log") ...`
     fn parse_call_expr(&mut self) -> Result<Expr, Error> {
         let start_span = self.peek_span().unwrap_or_default();
 
@@ -107,6 +127,7 @@ impl<'a> Parser<'a> {
         };
 
         self.expect_simple(TokenKind::LParen)?;
+        // Step2 要求参数是 literal，因此这里直接 parse_literal()
         let arg = Expr::Literal(self.parse_literal()?);
         let args = vec![arg];
         self.expect_rparen()?;
@@ -114,6 +135,8 @@ impl<'a> Parser<'a> {
     }
 
     /// 解析字面量（Literal）
+    ///
+    /// 如果当前 token 不是字面量，会返回 `ExpectedLiteral` 错误。
     fn parse_literal(&mut self) -> Result<Literal, Error> {
         match self.peek_kind() {
             Some(TokenKind::Number(n)) => {
@@ -139,6 +162,7 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// 期望下一个 token 是标识符（Ident），并返回其字符串内容。
     fn expect_ident(&mut self) -> Result<String, Error> {
         match self.peek_kind() {
             Some(TokenKind::Ident(s)) => {
@@ -151,6 +175,7 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// 期望下一个 token 是分号 `;`，否则报 `MissingSemicolon`。
     fn expect_semicolon(&mut self) -> Result<(), Error> {
         match self.peek_kind() {
             Some(TokenKind::Semicolon) => {
@@ -162,6 +187,7 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// 期望下一个 token 是右括号 `)`，否则报 `MissingRParen`。
     fn expect_rparen(&mut self) -> Result<(), Error> {
         match self.peek_kind() {
             Some(TokenKind::RParen) => {
@@ -173,6 +199,7 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// 期望下一个 token 是点号 `.`，用于识别 `console.log` 里的 `.`。
     fn expect_dot(&mut self) -> Result<(), Error> {
         match self.peek_kind() {
             Some(TokenKind::Dot) => {
@@ -184,6 +211,10 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// 期望下一个 token 是某些“固定符号/关键字”。
+    ///
+    /// 这里没有做一个通用的 token 比较函数，而是仅覆盖 Step2 会用到的那几个 token，
+    /// 让实现保持最小且更直观。
     fn expect_simple(&mut self, kind: TokenKind) -> Result<(), Error> {
         match (self.peek_kind(), &kind) {
             (Some(TokenKind::KwLet), TokenKind::KwLet)
@@ -199,14 +230,17 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// 偷看当前 token 的 kind（不前进）。
     fn peek_kind(&self) -> Option<&TokenKind> {
         self.tokens.get(self.i).map(|t| &t.kind)
     }
 
+    /// 偷看当前 token 的 span（不前进）。
     fn peek_span(&self) -> Option<Span> {
         self.tokens.get(self.i).map(|t| t.span)
     }
 
+    /// 吃掉一个 token，并让光标右移一格。
     fn bump(&mut self) -> Option<&'a Token> {
         let tok = self.tokens.get(self.i);
         if tok.is_some() {
@@ -219,18 +253,27 @@ impl<'a> Parser<'a> {
         self.i >= self.tokens.len()
     }
 
+    /// 构造一个错误：定位到“当前 token”的 span。
+    ///
+    /// 如果已经没有 token（EOF），就退化为使用最后一个 token 的 span（见 eof_span）。
     fn err_here(&self, code: &'static str) -> Error {
         Error::new(code, self.peek_span().unwrap_or_else(|| self.eof_span()))
     }
 
+    /// 构造一个错误：定位到 EOF（使用最后一个 token 的 span）。
     fn err_eof(&self, code: &'static str) -> Error {
         Error::new(code, self.eof_span())
     }
 
+    /// 构造一个错误：定位到指定 span。
     fn err_span(&self, code: &'static str, span: Span) -> Error {
         Error::new(code, span)
     }
 
+    /// 计算一个“EOF 时的 span”。
+    ///
+    /// - 如果 tokens 非空：使用最后一个 token 的 span（至少能落在文件末尾附近）
+    /// - 如果 tokens 为空：使用默认 span（1:1..1:1）
     fn eof_span(&self) -> Span {
         self.tokens.last().map(|t| t.span).unwrap_or_default()
     }

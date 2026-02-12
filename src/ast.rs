@@ -1,12 +1,22 @@
 /// 整个程序（Program）的 AST 节点。
-/// 目前（Step2）只包含一系列语句。
+///
+/// AST（抽象语法树）是“语法结构的树形表示”，它比 Token 流更接近我们对代码结构的理解：
+/// - Token 流：`let`、`x`、`=`、`1`、`;`（一串积木）
+/// - AST：一条“变量声明语句”，名字是 x，初始值是数字 1（有结构）
+///
+/// 目前（Step2/Step3）只支持最小语句集，所以 Program 里只是一组 `Stmt`。
+///
+/// 说明：为了保持最小实现，这里的 AST 节点暂不保存 Span。
+/// 错误定位主要由 Parser 在报错时提供（使用当前 Token 的 Span）。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Program {
     pub stmts: Vec<Stmt>,
 }
 
 /// 语句（Statement）枚举。
-/// 支持变量声明（let/const）和表达式语句（console.log）。
+///
+/// 本项目的“语句”就是一条可以独立执行的代码，且在 Step2 的语法里每条语句必须以 `;` 结尾。
+/// 由于 `;` 只是语法细节，不影响语义结构，所以 AST 里不显式保存分号。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Stmt {
     /// 变量声明：`let x = 1;` 或 `const y = "abc";`
@@ -15,7 +25,9 @@ pub enum Stmt {
     ExprStmt(Expr),
 }
 
-/// 变量声明结构体。
+/// 变量声明结构体（let/const）。
+///
+/// Step2 限制：初始化表达式只允许是字面量（Literal）。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VarDecl {
     /// 是否为常量（const 为 true，let 为 false）
@@ -27,7 +39,10 @@ pub struct VarDecl {
 }
 
 /// 表达式（Expression）枚举。
-/// 目前支持字面量和函数调用。
+///
+/// Step2/Step3 的最小表达式集：
+/// - 字面量：number/string/boolean
+/// - 函数调用：仅支持 console.log(literal)
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Expr {
     /// 字面量表达式：123, "abc", true
@@ -37,6 +52,8 @@ pub enum Expr {
 }
 
 /// 函数调用表达式结构体。
+///
+/// Step2 约束：只支持一个参数，并且参数必须是字面量。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CallExpr {
     /// 被调用的函数（目前只能是 console.log）
