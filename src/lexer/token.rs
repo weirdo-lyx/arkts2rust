@@ -43,6 +43,7 @@ pub enum TokenKind {
     RBrace,
     Comma,
     Dot,
+    Colon,
     Semicolon,
 
     // ---------- 运算符 ----------

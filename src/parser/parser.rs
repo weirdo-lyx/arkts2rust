@@ -1,6 +1,6 @@
 use crate::ast::{
-    AssignStmt, BinaryExpr, BinaryOp, BlockStmt, Callee, CallExpr, Expr, IfStmt, Literal, Program,
-    ReturnStmt, Stmt, UnaryExpr, UnaryOp, VarDecl, WhileStmt,
+    AssignStmt, BinaryExpr, BinaryOp, BlockStmt, Callee, CallExpr, Expr, FuncDecl, IfStmt, Literal,
+    Param, Program, ReturnStmt, Stmt, TypeAnn, UnaryExpr, UnaryOp, VarDecl, WhileStmt,
 };
 use crate::error::Error;
 use crate::lexer::token::Token;
@@ -33,11 +33,15 @@ impl<'a> Parser<'a> {
     ///
     /// 规则：一直解析语句直到 token 用完（EOF）。
     fn parse_program(&mut self) -> Result<Program, Error> {
+        let mut funcs = Vec::new();
         let mut stmts = Vec::new();
         while !self.is_eof() {
-            stmts.push(self.parse_stmt()?);
+            match self.peek_kind() {
+                Some(TokenKind::KwFunction) => funcs.push(self.parse_func_decl()?),
+                _ => stmts.push(self.parse_stmt()?),
+            }
         }
-        Ok(Program { stmts })
+        Ok(Program { funcs, stmts })
     }
 
     /// 解析单条语句（Stmt）
@@ -56,6 +60,7 @@ impl<'a> Parser<'a> {
         match self.peek_kind() {
             Some(TokenKind::KwLet) => self.parse_var_decl(false),
             Some(TokenKind::KwConst) => self.parse_var_decl(true),
+            Some(TokenKind::KwFunction) => Err(self.err_here("FunctionNotAllowedHere")),
             Some(TokenKind::LBrace) => self.parse_block_stmt(),
             Some(TokenKind::KwIf) => self.parse_if_stmt(),
             Some(TokenKind::KwWhile) => self.parse_while_stmt(),
@@ -95,6 +100,85 @@ impl<'a> Parser<'a> {
             name,
             init: lit,
         }))
+    }
+
+    /// 解析顶层函数声明（Step6）。
+    ///
+    /// 语法（类型标注可选）：
+    /// ```text
+    /// function name(a: number, b: number): number { ... }
+    /// function name(a, b) { ... }
+    /// ```
+    fn parse_func_decl(&mut self) -> Result<FuncDecl, Error> {
+        let _ = self.bump(); // 吃掉 'function'
+
+        let name = self.expect_ident()?;
+        self.expect_simple(TokenKind::LParen)?;
+
+        let mut params = Vec::new();
+        if !matches!(self.peek_kind(), Some(TokenKind::RParen)) {
+            loop {
+                params.push(self.parse_param()?);
+                match self.peek_kind() {
+                    Some(TokenKind::Comma) => {
+                        let _ = self.bump();
+                    }
+                    Some(TokenKind::RParen) => break,
+                    Some(_) => return Err(self.err_here("UnexpectedToken")),
+                    None => return Err(self.err_eof("UnexpectedEof")),
+                }
+            }
+        }
+        self.expect_rparen()?;
+
+        let ret_type = if matches!(self.peek_kind(), Some(TokenKind::Colon)) {
+            let _ = self.bump();
+            Some(self.parse_type_ann()?)
+        } else {
+            None
+        };
+
+        let body = self.parse_block_only()?;
+        Ok(FuncDecl {
+            name,
+            params,
+            ret_type,
+            body,
+        })
+    }
+
+    fn parse_param(&mut self) -> Result<Param, Error> {
+        let name = self.expect_ident()?;
+        let ty = if matches!(self.peek_kind(), Some(TokenKind::Colon)) {
+            let _ = self.bump();
+            Some(self.parse_type_ann()?)
+        } else {
+            None
+        };
+        Ok(Param { name, ty })
+    }
+
+    fn parse_type_ann(&mut self) -> Result<TypeAnn, Error> {
+        let start = self.peek_span().unwrap_or_default();
+        let s = self.expect_ident()?;
+        match s.as_str() {
+            "number" => Ok(TypeAnn::Number),
+            "string" => Ok(TypeAnn::String),
+            "boolean" => Ok(TypeAnn::Boolean),
+            "void" => Ok(TypeAnn::Void),
+            _ => Err(Error::new("UnknownType", start)),
+        }
+    }
+
+    /// 只解析一个 block，并返回 BlockStmt（用于函数体）。
+    fn parse_block_only(&mut self) -> Result<BlockStmt, Error> {
+        if !matches!(self.peek_kind(), Some(TokenKind::LBrace)) {
+            return Err(self.err_here("ExpectedBlock"));
+        }
+        match self.parse_block_stmt()? {
+            Stmt::Block(b) => Ok(b),
+            _ => Err(self.err_here("UnexpectedToken")),
+        }
     }
 
     /// 解析代码块：`{ stmt* }`

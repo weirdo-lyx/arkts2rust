@@ -74,6 +74,10 @@ impl<'a> Lexer<'a> {
                     self.bump_char();
                     TokenKind::Dot
                 }
+                ':' => {
+                    self.bump_char();
+                    TokenKind::Colon
+                }
                 ';' => {
                     self.bump_char();
                     TokenKind::Semicolon

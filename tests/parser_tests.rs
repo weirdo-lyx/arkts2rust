@@ -4,7 +4,10 @@ use arkts2rust::{
 };
 
 fn program(stmts: Vec<Stmt>) -> Program {
-    Program { stmts }
+    Program {
+        funcs: vec![],
+        stmts,
+    }
 }
 
 #[test]

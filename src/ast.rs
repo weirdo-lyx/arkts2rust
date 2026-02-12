@@ -10,6 +10,14 @@
 /// 错误定位主要由 Parser 在报错时提供（使用当前 Token 的 Span）。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Program {
+    /// 顶层函数声明列表：`function foo(...) { ... }`
+    ///
+    /// Step6 起允许在顶层定义多个函数。CodeGen 会把它们翻译成 Rust 的 `fn foo(...) { ... }`，
+    /// 并且放在 `fn main()` 之前。
+    pub funcs: Vec<FuncDecl>,
+    /// 顶层语句列表。
+    ///
+    /// Rust 要求可执行语句必须放在函数体里，所以这些顶层语句会在 CodeGen 时被放进 `fn main(){...}`。
     pub stmts: Vec<Stmt>,
 }
 
@@ -43,6 +51,43 @@ pub enum Stmt {
     /// Rust 的 main 返回类型是 `()`，因此 `return <expr>;` 的“返回值”在 Rust 中没有意义。
     /// CodeGen 会把它当作“提前结束”处理：先计算 expr（若存在），再 `return;`。
     Return(ReturnStmt),
+}
+
+/// 顶层函数声明结构体（Step6）。
+///
+/// 语法示例：
+/// ```text
+/// function add(a: number, b: number): number { return a + b; }
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FuncDecl {
+    pub name: String,
+    pub params: Vec<Param>,
+    /// 返回类型标注（可选）。
+    ///
+    /// 说明：类型标注只用于 CodeGen，不做完整类型推导/检查。
+    pub ret_type: Option<TypeAnn>,
+    pub body: BlockStmt,
+}
+
+/// 函数参数结构体（Step6）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Param {
+    pub name: String,
+    /// 参数类型标注（可选）。
+    pub ty: Option<TypeAnn>,
+}
+
+/// 基础类型标注（Step6）。
+///
+/// 本项目只支持 4 个基础类型（与需求一致）：
+/// - number / string / boolean / void
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TypeAnn {
+    Number,
+    String,
+    Boolean,
+    Void,
 }
 
 /// 变量声明结构体（let/const）。
