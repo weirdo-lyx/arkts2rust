@@ -70,6 +70,10 @@ impl<'a> Lexer<'a> {
                     self.bump_char();
                     TokenKind::Comma
                 }
+                '.' => {
+                    self.bump_char();
+                    TokenKind::Dot
+                }
                 ';' => {
                     self.bump_char();
                     TokenKind::Semicolon
