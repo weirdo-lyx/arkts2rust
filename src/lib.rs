@@ -14,7 +14,9 @@ pub mod span;
 /// 这样拆分的好处：
 /// - 测试更方便：tests/ 更像“外部用户”，只调用 lib 暴露的函数。
 /// - 复用更容易：未来其它 Rust 项目也能直接依赖这个库。
-pub use ast::{Callee, CallExpr, Expr, Literal, Program, Stmt, VarDecl};
+pub use ast::{
+    Callee, CallExpr, Expr, FuncDecl, Literal, Param, Program, Stmt, TypeAnn, VarDecl,
+};
 pub use error::Error;
 pub use lexer::{lex, Token, TokenKind};
 pub use parser::parse as parse_tokens;
