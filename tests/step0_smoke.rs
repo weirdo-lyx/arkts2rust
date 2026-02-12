@@ -1,8 +1,7 @@
-use arkts2rust::{compile, Span};
+use arkts2rust::compile;
 
 #[test]
 fn step0_compile_smoke() {
-    let err = compile("let x = 1;").expect_err("Step0 should be a placeholder implementation");
-    assert_eq!(err.code, "NotImplemented");
-    assert_eq!(err.span, Span::default());
+    let rust = compile("let x = 1;").unwrap();
+    assert_eq!(rust, "fn main() {\n    let mut x = 1i32;\n}\n");
 }
