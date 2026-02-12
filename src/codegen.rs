@@ -1,6 +1,6 @@
 use crate::ast::{
-    AssignStmt, BinaryExpr, BinaryOp, Callee, CallExpr, Expr, Literal, Program, Stmt, UnaryExpr,
-    UnaryOp, VarDecl,
+    AssignStmt, BinaryExpr, BinaryOp, BlockStmt, Callee, CallExpr, Expr, IfStmt, Literal, Program,
+    ReturnStmt, Stmt, UnaryExpr, UnaryOp, VarDecl, WhileStmt,
 };
 use crate::error::Error;
 use crate::span::Span;
@@ -30,9 +30,7 @@ pub fn gen_program(program: &Program) -> Result<String, Error> {
     let mut out = String::new();
     out.push_str("fn main() {\n");
     for stmt in &program.stmts {
-        out.push_str("    ");
-        out.push_str(&gen_stmt(stmt)?);
-        out.push('\n');
+        gen_stmt_into(&mut out, 1, stmt)?;
     }
     out.push_str("}\n");
     Ok(out)
@@ -44,14 +42,9 @@ pub fn gen_program(program: &Program) -> Result<String, Error> {
 /// - 变量声明语句：内部会补 `;`
 /// - 表达式语句：这里统一在表达式后补 `;`
 pub fn gen_stmt(stmt: &Stmt) -> Result<String, Error> {
-    match stmt {
-        Stmt::VarDecl(v) => gen_var_decl(v),
-        Stmt::Assign(a) => gen_assign(a),
-        Stmt::ExprStmt(e) => {
-            let expr = gen_expr(e)?;
-            Ok(format!("{expr};"))
-        }
-    }
+    let mut out = String::new();
+    gen_stmt_into(&mut out, 0, stmt)?;
+    Ok(out.trim_end_matches('\n').to_string())
 }
 
 /// 生成变量声明。
@@ -82,6 +75,120 @@ pub fn gen_expr(expr: &Expr) -> Result<String, Error> {
 fn gen_assign(a: &AssignStmt) -> Result<String, Error> {
     let value = gen_expr(&a.value)?;
     Ok(format!("{} = {value};", a.name))
+}
+
+fn gen_return(r: &ReturnStmt) -> Result<Vec<String>, Error> {
+    match &r.value {
+        None => Ok(vec!["return;".to_string()]),
+        Some(v) => {
+            let value = gen_expr(v)?;
+            Ok(vec![format!("let _ = {value};"), "return;".to_string()])
+        }
+    }
+}
+
+fn gen_block(b: &BlockStmt, indent: usize) -> Result<String, Error> {
+    let mut out = String::new();
+    push_indent(&mut out, indent);
+    out.push_str("{\n");
+    for s in &b.stmts {
+        gen_stmt_into(&mut out, indent + 1, s)?;
+    }
+    push_indent(&mut out, indent);
+    out.push_str("}\n");
+    Ok(out)
+}
+
+fn gen_if(stmt: &IfStmt, indent: usize) -> Result<String, Error> {
+    let cond = gen_expr(&stmt.cond)?;
+
+    let mut out = String::new();
+    push_indent(&mut out, indent);
+    out.push_str("if ");
+    out.push_str(&cond);
+    out.push_str(" {\n");
+    gen_block_body(&mut out, indent + 1, &stmt.then_branch)?;
+    push_indent(&mut out, indent);
+    out.push_str("} else {\n");
+    gen_block_body(&mut out, indent + 1, &stmt.else_branch)?;
+    push_indent(&mut out, indent);
+    out.push_str("}\n");
+    Ok(out)
+}
+
+fn gen_while(stmt: &WhileStmt, indent: usize) -> Result<String, Error> {
+    let cond = gen_expr(&stmt.cond)?;
+
+    let mut out = String::new();
+    push_indent(&mut out, indent);
+    out.push_str("while ");
+    out.push_str(&cond);
+    out.push_str(" {\n");
+    gen_block_body(&mut out, indent + 1, &stmt.body)?;
+    push_indent(&mut out, indent);
+    out.push_str("}\n");
+    Ok(out)
+}
+
+fn gen_block_body(out: &mut String, indent: usize, stmt: &Stmt) -> Result<(), Error> {
+    match stmt {
+        Stmt::Block(b) => {
+            for s in &b.stmts {
+                gen_stmt_into(out, indent, s)?;
+            }
+            Ok(())
+        }
+        _ => gen_stmt_into(out, indent, stmt),
+    }
+}
+
+fn gen_stmt_into(out: &mut String, indent: usize, stmt: &Stmt) -> Result<(), Error> {
+    match stmt {
+        Stmt::VarDecl(v) => {
+            push_indent(out, indent);
+            out.push_str(&gen_var_decl(v)?);
+            out.push('\n');
+            Ok(())
+        }
+        Stmt::Assign(a) => {
+            push_indent(out, indent);
+            out.push_str(&gen_assign(a)?);
+            out.push('\n');
+            Ok(())
+        }
+        Stmt::ExprStmt(e) => {
+            push_indent(out, indent);
+            out.push_str(&format!("{};", gen_expr(e)?));
+            out.push('\n');
+            Ok(())
+        }
+        Stmt::Return(r) => {
+            for line in gen_return(r)? {
+                push_indent(out, indent);
+                out.push_str(&line);
+                out.push('\n');
+            }
+            Ok(())
+        }
+        Stmt::Block(b) => {
+            out.push_str(&gen_block(b, indent)?);
+            Ok(())
+        }
+        Stmt::If(i) => {
+            out.push_str(&gen_if(i, indent)?);
+            Ok(())
+        }
+        Stmt::While(w) => {
+            out.push_str(&gen_while(w, indent)?);
+            Ok(())
+        }
+    }
+}
+
+fn push_indent(out: &mut String, indent: usize) {
+    for _ in 0..indent {
+        out.push_str("    ");
+    }
 }
 
 /// 生成函数调用表达式。
