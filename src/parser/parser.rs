@@ -93,12 +93,12 @@ impl<'a> Parser<'a> {
 
         let name = self.expect_ident()?; // 变量名
         self.expect_simple(TokenKind::Eq)?; // 等号
-        let lit = self.parse_literal()?; // 初始值
+        let init = self.parse_expr_bp(0)?; // 初始值
         self.expect_semicolon()?; // 分号
         Ok(Stmt::VarDecl(VarDecl {
             is_const,
             name,
-            init: lit,
+            init,
         }))
     }
 
@@ -210,19 +210,17 @@ impl<'a> Parser<'a> {
 
         let then_branch = self.parse_stmt()?;
 
-        match self.peek_kind() {
-            Some(TokenKind::KwElse) => {
-                let _ = self.bump();
-            }
-            Some(_) => return Err(self.err_here("MissingElse")),
-            None => return Err(self.err_eof("MissingElse")),
-        }
+        let else_branch = if matches!(self.peek_kind(), Some(TokenKind::KwElse)) {
+            let _ = self.bump();
+            Some(Box::new(self.parse_stmt()?))
+        } else {
+            None
+        };
 
-        let else_branch = self.parse_stmt()?;
         Ok(Stmt::If(IfStmt {
             cond,
             then_branch: Box::new(then_branch),
-            else_branch: Box::new(else_branch),
+            else_branch,
         }))
     }
 
@@ -421,7 +419,7 @@ impl<'a> Parser<'a> {
         };
 
         self.expect_simple(TokenKind::LParen)?;
-        let arg = Expr::Literal(self.parse_literal()?);
+        let arg = self.parse_expr_bp(0)?;
         let args = vec![arg];
         self.expect_rparen()?;
         Ok(Expr::Call(CallExpr { callee, args }))
