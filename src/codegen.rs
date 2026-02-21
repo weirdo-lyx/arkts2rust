@@ -62,7 +62,7 @@ pub fn gen_stmt(stmt: &Stmt) -> Result<String, Error> {
 /// - `const s = "hi";` -> `let s = String::from("hi");`
 fn gen_var_decl(v: &VarDecl) -> Result<String, Error> {
     let keyword = if v.is_const { "let" } else { "let mut" };
-    let init = gen_literal_expr(&v.init);
+    let init = gen_expr(&v.init)?;
     Ok(format!("{keyword} {} = {init};", v.name))
 }
 
@@ -199,10 +199,16 @@ fn gen_if_ctx(ctx: ReturnCtx, stmt: &IfStmt, indent: usize) -> Result<String, Er
     out.push_str(" {\n");
     gen_block_body(&mut out, indent + 1, ctx, &stmt.then_branch)?;
     push_indent(&mut out, indent);
-    out.push_str("} else {\n");
-    gen_block_body(&mut out, indent + 1, ctx, &stmt.else_branch)?;
-    push_indent(&mut out, indent);
-    out.push_str("}\n");
+    out.push('}');
+
+    if let Some(else_branch) = &stmt.else_branch {
+        out.push_str(" else {\n");
+        gen_block_body(&mut out, indent + 1, ctx, else_branch)?;
+        push_indent(&mut out, indent);
+        out.push_str("}\n");
+    } else {
+        out.push('\n');
+    }
     Ok(out)
 }
 
@@ -280,7 +286,13 @@ fn stmt_has_return_value(s: &Stmt) -> bool {
     match s {
         Stmt::Return(r) => r.value.is_some(),
         Stmt::Block(b) => b.stmts.iter().any(stmt_has_return_value),
-        Stmt::If(i) => stmt_has_return_value(&i.then_branch) || stmt_has_return_value(&i.else_branch),
+        Stmt::If(i) => {
+            stmt_has_return_value(&i.then_branch)
+                || i.else_branch
+                    .as_ref()
+                    .map(|b| stmt_has_return_value(b))
+                    .unwrap_or(false)
+        }
         Stmt::While(w) => stmt_has_return_value(&w.body),
         _ => false,
     }

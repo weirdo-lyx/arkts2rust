@@ -99,8 +99,8 @@ pub struct VarDecl {
     pub is_const: bool,
     /// 变量名
     pub name: String,
-    /// 初始值（目前只支持字面量）
-    pub init: Literal,
+    /// 初始值（支持任意表达式）
+    pub init: Expr,
 }
 
 /// 赋值语句结构体：`name = value;`
@@ -121,7 +121,7 @@ pub struct BlockStmt {
 pub struct IfStmt {
     pub cond: Expr,
     pub then_branch: Box<Stmt>,
-    pub else_branch: Box<Stmt>,
+    pub else_branch: Option<Box<Stmt>>,
 }
 
 /// while 结构体。
