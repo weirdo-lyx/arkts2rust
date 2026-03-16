@@ -1,3 +1,7 @@
+use std::env;
+use std::io::Write;
+use std::process::{Command, Stdio};
+
 pub mod ast;
 pub mod codegen;
 pub mod error;
@@ -42,4 +46,68 @@ pub fn compile(src: &str) -> Result<String, Error> {
     let tokens = lex(src)?;
     let program = parse_tokens(&tokens)?;
     codegen::generate(&program)
+}
+
+pub fn compile_with_ai(src: &str) -> Result<String, Error> {
+    match compile(src) {
+        Ok(rust) => Ok(rust),
+        Err(e) => match ai_fallback(src, &e) {
+            Ok(rust) => Ok(rust),
+            Err(_) => Err(e),
+        },
+    }
+}
+
+fn ai_fallback(src: &str, err: &Error) -> Result<String, Error> {
+    eprintln!("[Compiler] Rule-based compilation failed: {}. Falling back to AI...", err);
+    // 默认使用内置的桥接脚本路径，用户仍可以通过环境变量覆盖
+    let cmd = match env::var("ARKTS2RUST_AI_CMD") {
+        Ok(v) if !v.trim().is_empty() => v,
+        _ => "python3 tools/ai_bridge.py".to_string(),
+    };
+    let prompt = build_ai_prompt(src, err);
+    match run_ai_command(&cmd, &prompt) {
+        Ok(out) if !out.trim().is_empty() => Ok(out),
+        _ => Err(Error::new("AIFallbackFailed", Span::default())),
+    }
+}
+
+fn build_ai_prompt(src: &str, err: &Error) -> String {
+    let mut out = String::new();
+    out.push_str("你是 ArkTS 到 Rust 的转换器。\n");
+    out.push_str("编译器在规则转换阶段失败，请直接输出 Rust 源码。\n");
+    out.push_str("只输出 Rust 代码，不要解释。\n\n");
+    out.push_str("【ArkTS 源码】\n");
+    out.push_str(src);
+    out.push_str("\n\n【错误信息】\n");
+    out.push_str(&format!("{}", err));
+    out
+}
+
+fn run_ai_command(cmd: &str, input: &str) -> Result<String, Error> {
+    let mut parts = cmd.split_whitespace();
+    let program = match parts.next() {
+        Some(p) => p,
+        None => return Err(Error::new("AIFallbackInvalidCmd", Span::default())),
+    };
+    let args: Vec<&str> = parts.collect();
+    let mut child = Command::new(program)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .map_err(|_| Error::new("AIFallbackSpawnFailed", Span::default()))?;
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(input.as_bytes())
+            .map_err(|_| Error::new("AIFallbackWriteFailed", Span::default()))?;
+    }
+    let output = child
+        .wait_with_output()
+        .map_err(|_| Error::new("AIFallbackExecFailed", Span::default()))?;
+    if !output.status.success() {
+        return Err(Error::new("AIFallbackNonZeroExit", Span::default()));
+    }
+    String::from_utf8(output.stdout)
+        .map_err(|_| Error::new("AIFallbackInvalidUtf8", Span::default()))
 }

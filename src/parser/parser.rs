@@ -214,7 +214,7 @@ impl<'a> Parser<'a> {
             let _ = self.bump();
             Some(Box::new(self.parse_stmt()?))
         } else {
-            None
+            return Err(self.err_here("MissingElse"));
         };
 
         Ok(Stmt::If(IfStmt {

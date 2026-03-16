@@ -51,7 +51,7 @@ fn main() {
     };
 
     // 调用库函数进行编译（返回 Rust 源码字符串）
-    match arkts2rust::compile(&src) {
+    match arkts2rust::compile_with_ai(&src) {
         Ok(rust_code) => {
             // 写出到文件
             if let Err(e) = fs::write(&output_path, rust_code) {

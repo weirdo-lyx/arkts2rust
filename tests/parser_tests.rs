@@ -18,7 +18,7 @@ fn parse_let_number() {
         program(vec![Stmt::VarDecl(VarDecl {
             is_const: false,
             name: "x".into(),
-            init: Literal::Number(1),
+            init: Expr::Literal(Literal::Number(1)),
         })])
     );
 }
@@ -31,7 +31,7 @@ fn parse_const_string() {
         program(vec![Stmt::VarDecl(VarDecl {
             is_const: true,
             name: "s".into(),
-            init: Literal::String("hi".into()),
+            init: Expr::Literal(Literal::String("hi".into())),
         })])
     );
 }
@@ -44,7 +44,7 @@ fn parse_let_bool_true() {
         program(vec![Stmt::VarDecl(VarDecl {
             is_const: false,
             name: "ok".into(),
-            init: Literal::Bool(true),
+            init: Expr::Literal(Literal::Bool(true)),
         })])
     );
 }
@@ -75,8 +75,21 @@ fn parse_console_log_string() {
 
 #[test]
 fn parse_multiple_stmts() {
-    let p = parse_program("let x = 1; console.log(x);").unwrap_err();
-    assert_eq!(p.code, "ExpectedLiteral");
+    let p = parse_program("let x = 1; console.log(x);").unwrap();
+    assert_eq!(
+        p,
+        program(vec![
+            Stmt::VarDecl(VarDecl {
+                is_const: false,
+                name: "x".into(),
+                init: Expr::Literal(Literal::Number(1)),
+            }),
+            Stmt::ExprStmt(Expr::Call(CallExpr {
+                callee: Callee::ConsoleLog,
+                args: vec![Expr::Ident("x".into())],
+            })),
+        ])
+    );
 }
 
 #[test]
@@ -93,7 +106,7 @@ let x = 1;
             Stmt::VarDecl(VarDecl {
                 is_const: false,
                 name: "x".into(),
-                init: Literal::Number(1),
+                init: Expr::Literal(Literal::Number(1)),
             }),
             Stmt::ExprStmt(Expr::Call(CallExpr {
                 callee: Callee::ConsoleLog,
@@ -138,7 +151,7 @@ fn parse_from_tokens_directly() {
         program(vec![Stmt::VarDecl(VarDecl {
             is_const: false,
             name: "x".into(),
-            init: Literal::Number(1),
+            init: Expr::Literal(Literal::Number(1)),
         })])
     );
 }
